@@ -37,6 +37,9 @@ import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CameraMetadata;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.params.StreamConfigurationMap;
+import android.media.AudioFormat;
+import android.media.AudioManager;
+import android.media.AudioTrack;
 import android.media.MediaRecorder;
 import android.os.Bundle;
 import android.os.Handler;
@@ -52,14 +55,19 @@ import android.view.Surface;
 import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.animation.AlphaAnimation;
+import android.view.animation.Animation;
 import android.widget.Button;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.File;
 import java.io.IOException;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.Date;
 import java.util.List;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
@@ -96,6 +104,11 @@ public class Camera2VideoFragment extends Fragment
     private Button mButtonVideo;
 
     /**
+     * Text view for countdown
+     */
+    private TextView    mCountdownText;
+
+    /**
      * A refernce to the opened {@link android.hardware.camera2.CameraDevice}.
      */
     private CameraDevice mCameraDevice;
@@ -105,6 +118,12 @@ public class Camera2VideoFragment extends Fragment
      * preview.
      */
     private CameraCaptureSession mPreviewSession;
+
+    enum RecordingState {
+        WAITING, COUNTING, RECORDING
+    }
+
+    private RecordingState  mRecordingState = RecordingState.WAITING;
 
     /**
      * {@link TextureView.SurfaceTextureListener} handles several lifecycle events on a
@@ -160,6 +179,21 @@ public class Camera2VideoFragment extends Fragment
      * Whether the app is recording video now
      */
     private boolean mIsRecordingVideo;
+
+    /**
+     * Output file location
+     */
+    private String  mOutputFilePath;
+
+    /**
+     * Output file for writing
+     */
+    private File    mOutputFile;
+
+    /**
+     * SimpleDateFormat used to construct output file name.
+     */
+    private SimpleDateFormat simpleDateFormat    = new SimpleDateFormat("yyyyMMdd_HHmmss");
 
     /**
      * An additional thread for running tasks that shouldn't block the UI.
@@ -275,7 +309,7 @@ public class Camera2VideoFragment extends Fragment
         mTextureView = (AutoFitTextureView) view.findViewById(R.id.texture);
         mButtonVideo = (Button) view.findViewById(R.id.video);
         mButtonVideo.setOnClickListener(this);
-        view.findViewById(R.id.info).setOnClickListener(this);
+        mCountdownText  = (TextView) view.findViewById(R.id.countdown_text);
     }
 
     @Override
@@ -300,24 +334,108 @@ public class Camera2VideoFragment extends Fragment
     public void onClick(View view) {
         switch (view.getId()) {
             case R.id.video: {
-                if (mIsRecordingVideo) {
+                if (mRecordingState == RecordingState.RECORDING) {
                     stopRecordingVideo();
-                } else {
-                    startRecordingVideo();
                 }
-                break;
-            }
-            case R.id.info: {
-                Activity activity = getActivity();
-                if (null != activity) {
-                    new AlertDialog.Builder(activity)
-                            .setMessage(R.string.intro_message)
-                            .setPositiveButton(android.R.string.ok, null)
-                            .show();
+                else if (mRecordingState == RecordingState.WAITING) {
+                    setRecordingState(RecordingState.COUNTING);
+                    countDown(mCountdownText, 10, new Runnable() { public void run() { startRecordingVideo(); } });
+//                    startRecordingVideo();
                 }
+                else if (mRecordingState == RecordingState.COUNTING) {
+                    setRecordingState(RecordingState.WAITING);
+                }
+
                 break;
             }
         }
+    }
+
+    private void countDown(final TextView tv, final int count, final Runnable callback) {
+        if (mRecordingState != RecordingState.COUNTING)
+            return;
+
+        if (count == 0) {
+            tv.setText(""); // Note: the TextView will be visible again here.
+            if (callback != null)
+                callback.run();
+            return;
+        }
+
+        tv.setText(String.valueOf(count));
+
+        // When close to zero, increase frequency and volume a bit.
+        if (count < 3)
+            playTone(1600, 400, 0.6f);
+        else
+            playTone(1500, 400, 0.4f);
+
+        AlphaAnimation animation = new AlphaAnimation(1.0f, 0.0f);
+        animation.setDuration(1000);
+        animation.setAnimationListener(new Animation.AnimationListener() {
+            @Override
+            public void onAnimationStart(Animation animation) {
+            }
+
+            @Override
+            public void onAnimationEnd(Animation anim) {
+                countDown(tv, count - 1, callback);
+            }
+
+            @Override
+            public void onAnimationRepeat(Animation animation) {
+            }
+        });
+        tv.startAnimation(animation);
+    }
+
+    private void playTone(final int frequency, final int duration, final float volume) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    int     sampleRate  = 8000;
+                    int     amplitude   = 32000;
+                    double  twoPI       = Math.PI * 2.0;
+                    int     sampleSize  = (sampleRate / 1000) * (int) duration;
+                    short   samples[]   = new short[sampleSize];
+                    double  phase       = 0.0;
+
+                    for (int ctr = 0; ctr < sampleSize; ctr++) {
+                        phase           += twoPI * frequency / sampleRate;
+                        samples[ctr]    = (short) (amplitude * Math.sin(phase));
+                    }
+
+                    final AudioTrack audioTrack  =
+                            new AudioTrack(AudioManager.STREAM_MUSIC, sampleRate, AudioFormat.CHANNEL_OUT_MONO,
+                                    AudioFormat.ENCODING_PCM_16BIT, sampleSize * 2, AudioTrack.MODE_STATIC);
+
+                    audioTrack.write(samples, 0, sampleSize);
+
+                    audioTrack.setStereoVolume(volume, volume);
+
+                    audioTrack.play();
+
+                    try {
+                        Thread.sleep(duration);
+                    } catch (Exception ex) {
+                    }
+
+                    audioTrack.setStereoVolume(0, 0);
+
+                    audioTrack.stop();
+
+                    audioTrack.release();
+//                    int minSize = AudioTrack.getMinBufferSize(8000, AudioFormat.CHANNEL_CONFIGURATION_MONO, AudioFormat.ENCODING_PCM_16BIT);
+//                    AudioTrack audioTrack = new AudioTrack(AudioManager.STREAM_MUSIC, 8000, AudioFormat.CHANNEL_CONFIGURATION_MONO,
+//                            AudioFormat.ENCODING_PCM_16BIT, minSize, AudioTrack.MODE_STREAM);
+//                    audioTrack.play();
+                }
+                catch (IllegalArgumentException ex) {
+                    Log.e(TAG, "Failed AudioTrack", ex);
+                }
+            }
+        }).start();
     }
 
     /**
@@ -567,11 +685,19 @@ public class Camera2VideoFragment extends Fragment
         mTextureView.setTransform(matrix);
     }
 
+    private void initOutputFilePath(Context context) {
+        mOutputFilePath = context.getExternalFilesDir(null) + File.separator + simpleDateFormat.format(new Date()) + ".mp4";
+        mOutputFile = new File(mOutputFilePath);
+    }
+
     private void setUpMediaRecorder() throws IOException {
         final Activity activity = getActivity();
         if (null == activity) {
             return;
         }
+
+        initOutputFilePath(activity);
+
         mMediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC);
         mMediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
         mMediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
@@ -588,35 +714,63 @@ public class Camera2VideoFragment extends Fragment
     }
 
     private File getVideoFile(Context context) {
-        return new File(context.getExternalFilesDir(null), "video.mp4");
+//        return new File(context.getExternalFilesDir(null), "video.mp4");
+//        return new File(mOutputFilePath);
+        return mOutputFile;
+    }
+
+    private void setRecordingState(RecordingState recordingState) {
+        if (recordingState == RecordingState.WAITING) {
+            mButtonVideo.setText(getString(R.string.record));
+            mIsRecordingVideo   = false;
+        }
+        else if (recordingState == RecordingState.COUNTING) {
+            mButtonVideo.setText(getString(R.string.cancel));
+        }
+        else {
+            mButtonVideo.setText(getString(R.string.stop));
+            mIsRecordingVideo   = true;
+        }
+        mCountdownText.setText("");
+        mRecordingState = recordingState;
     }
 
     private void startRecordingVideo() {
         try {
             // UI
-            mButtonVideo.setText(R.string.stop);
-            mIsRecordingVideo = true;
+            setRecordingState(RecordingState.RECORDING);
+//            mButtonVideo.setText(getString(R.string.stop));
+//            mIsRecordingVideo = true;
+//            mRecordingState = RecordingState.RECORDING;
 
             // Start recording
             mMediaRecorder.start();
         } catch (IllegalStateException e) {
+            setRecordingState(RecordingState.WAITING);
             e.printStackTrace();
         }
     }
 
     private void stopRecordingVideo() {
         // UI
-        mIsRecordingVideo = false;
-        mButtonVideo.setText(R.string.record);
+        setRecordingState(RecordingState.WAITING);
+//        mIsRecordingVideo = false;
+//        mButtonVideo.setText(getString(R.string.record));
+//        mRecordingState = RecordingState.WAITING;
+
         // Stop recording
-        mMediaRecorder.stop();
-        mMediaRecorder.reset();
+//        mMediaRecorder.stop();
+//        mMediaRecorder.reset();
         Activity activity = getActivity();
         if (null != activity) {
             Toast.makeText(activity, "Video saved: " + getVideoFile(activity),
-                    Toast.LENGTH_SHORT).show();
+                    Toast.LENGTH_LONG).show();
+            Log.i(TAG, "Video saved: " + getVideoFile(activity));
         }
-        startPreview();
+//        startPreview();
+        // Workaround for https://github.com/googlesamples/android-Camera2Video/issues/2
+        closeCamera();
+        openCamera(mTextureView.getWidth(), mTextureView.getHeight());
     }
 
     /**
