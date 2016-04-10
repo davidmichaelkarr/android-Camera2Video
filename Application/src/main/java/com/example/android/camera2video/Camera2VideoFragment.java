@@ -109,7 +109,12 @@ public class Camera2VideoFragment extends Fragment
     private TextView    mCountdownText;
 
     /**
-     * A refernce to the opened {@link android.hardware.camera2.CameraDevice}.
+     * TextView to store path to last video stored.
+     */
+    private TextView    mLastStoredText;
+
+    /**
+     * A reference to the opened {@link android.hardware.camera2.CameraDevice}.
      */
     private CameraDevice mCameraDevice;
 
@@ -310,6 +315,7 @@ public class Camera2VideoFragment extends Fragment
         mButtonVideo = (Button) view.findViewById(R.id.video);
         mButtonVideo.setOnClickListener(this);
         mCountdownText  = (TextView) view.findViewById(R.id.countdown_text);
+        mLastStoredText = (TextView) view.findViewById(R.id.laststored_text);
     }
 
     @Override
@@ -766,6 +772,7 @@ public class Camera2VideoFragment extends Fragment
             Toast.makeText(activity, "Video saved: " + getVideoFile(activity),
                     Toast.LENGTH_LONG).show();
             Log.i(TAG, "Video saved: " + getVideoFile(activity));
+            mLastStoredText.setText(getVideoFile(activity).getAbsolutePath());
         }
 //        startPreview();
         // Workaround for https://github.com/googlesamples/android-Camera2Video/issues/2
