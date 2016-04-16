@@ -345,7 +345,12 @@ public class Camera2VideoFragment extends Fragment
                 }
                 else if (mRecordingState == RecordingState.WAITING) {
                     setRecordingState(RecordingState.COUNTING);
-                    countDown(mCountdownText, 10, new Runnable() { public void run() { startRecordingVideo(); } });
+                    countDown(mCountdownText, 10,
+                              new Runnable() {
+                                  public void run() {
+                                      startRecordingVideo();
+                                  }
+                              });
 //                    startRecordingVideo();
                 }
                 else if (mRecordingState == RecordingState.COUNTING) {
